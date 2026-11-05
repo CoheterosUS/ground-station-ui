@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" width="150">
 
-### COHETEROS GROUND STATION UI
+### COHETEROS US GROUND STATION UI
 
 <img src="assets/screenshot.png">
 
