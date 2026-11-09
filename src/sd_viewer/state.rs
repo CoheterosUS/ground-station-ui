@@ -514,6 +514,8 @@ impl SdViewerState {
         let mut filtered_vel: Option<f64> = None;
         let mut prev_alt: Option<f64> = None;
         let mut prev_tick: Option<u32> = None;
+        let mut prev_pressure: Option<f64> = None;
+        let mut prev_raw_alt: Option<f64> = None;
 
         for r in records {
             self.timestamps.push(r.tick as f64 / TICK_RATE_HZ);
@@ -546,32 +548,44 @@ impl SdViewerState {
             }
 
             if r.pressure_pa > 0.0 && ref_pressure > 0.0 {
-                let temp_k = r.temperature_c + 273.15;
-                let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
-                self.baro_altitude_raw.push(raw_alt);
-                let filt = match filtered_alt {
-                    Some(prev) => prev + ALPHA * (raw_alt - prev),
-                    None => raw_alt,
-                };
-                filtered_alt = Some(filt);
+                if prev_pressure == Some(r.pressure_pa) {
+                    // Sensor hasn't produced a new sample yet (SD log rate outpaces
+                    // the barometer's own refresh rate) - hold the last values
+                    // instead of re-running the IIR/derivative against a stale
+                    // input, which would alias into a sawtooth.
+                    self.baro_altitude_raw.push(prev_raw_alt.unwrap_or(0.0));
+                    self.baro_altitude.push(filtered_alt.unwrap_or(0.0));
+                    self.baro_velocity.push(filtered_vel.unwrap_or(0.0));
+                } else {
+                    let temp_k = r.temperature_c + 273.15;
+                    let raw_alt = (R * temp_k / G) * (ref_pressure / r.pressure_pa).ln();
+                    self.baro_altitude_raw.push(raw_alt);
+                    prev_raw_alt = Some(raw_alt);
+                    let filt = match filtered_alt {
+                        Some(prev) => prev + ALPHA * (raw_alt - prev),
+                        None => raw_alt,
+                    };
+                    filtered_alt = Some(filt);
 
-                let raw_vel = match (prev_alt, prev_tick) {
-                    (Some(pa), Some(pt)) => {
-                        let dt = (r.tick.wrapping_sub(pt)) as f64 / TICK_RATE_HZ;
-                        if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
-                    }
-                    _ => 0.0,
-                };
-                let vel = match filtered_vel {
-                    Some(fv) => fv + ALPHA_VEL * (raw_vel - fv),
-                    None => raw_vel,
-                };
-                filtered_vel = Some(vel);
-                prev_alt = Some(filt);
-                prev_tick = Some(r.tick);
+                    let raw_vel = match (prev_alt, prev_tick) {
+                        (Some(pa), Some(pt)) => {
+                            let dt = (r.tick.wrapping_sub(pt)) as f64 / TICK_RATE_HZ;
+                            if dt > 0.0 { (filt - pa) / dt } else { 0.0 }
+                        }
+                        _ => 0.0,
+                    };
+                    let vel = match filtered_vel {
+                        Some(fv) => fv + ALPHA_VEL * (raw_vel - fv),
+                        None => raw_vel,
+                    };
+                    filtered_vel = Some(vel);
+                    prev_alt = Some(filt);
+                    prev_tick = Some(r.tick);
 
-                self.baro_altitude.push(filt);
-                self.baro_velocity.push(vel);
+                    self.baro_altitude.push(filt);
+                    self.baro_velocity.push(vel);
+                }
+                prev_pressure = Some(r.pressure_pa);
             } else {
                 self.baro_altitude.push(0.0);
                 self.baro_altitude_raw.push(0.0);
